@@ -2,6 +2,9 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.my_pgpass
+.pg_services.conf
+pym/db.py
 
 # C extensions
 *.so
