@@ -5,6 +5,7 @@ __pycache__/
 .my_pgpass
 .pg_services.conf
 pym/db.py
+cards/tokens.py
 
 # C extensions
 *.so
