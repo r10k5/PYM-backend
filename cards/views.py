@@ -2,7 +2,7 @@ import asyncio
 
 from django.core import serializers
 from django.http import HttpResponse, JsonResponse
-from kinopoisk_dev import KinopoiskDev, PossValField, MovieParams, MovieField
+from kinopoisk_dev import KinopoiskDev, MovieParams, MovieField
 from .models import Card, Type, Genre
 from .tokens import TOKENS, SALT
 from asgiref.sync import sync_to_async
@@ -13,7 +13,6 @@ import datetime
 import hashlib
 
 kp = KinopoiskDev(token=TOKENS['kinopoisk'])
-
 
 async def get_movies_async(type, page):
     params = [
@@ -60,83 +59,111 @@ async def write_kp(request):
 
     return HttpResponse('OK')
 
-async def check_to_session(request, uid):
-    session = await redis_client.get(uid)
+def check_to_session(request, uid):
+    session = redis_client.get(uid)
 
     if session is None:
         return HttpResponse('404')
+
+    session = json.loads(session)
+
+    if session['limit'] == len(session['guest_names']):
+        return HttpResponse('Достигнут лимит участников')
+
     return HttpResponse('OK')
 
-async def connect_to_session(request, uid):
-    session = await redis_client.get(uid)
+def connect_to_session(request, uid):
+    session = redis_client.get(uid)
 
     if session is None:
         return HttpResponse('404')
+
+    session = json.loads(session)
 
     body_unicode = request.body.decode('utf-8')
     body_data = json.loads(body_unicode)
-
-    if not body_data.has_key('name'):
+    if 'name' in body_data:
         if session['creator_name'] == body_data['name']:
-            return JsonResponse({
-                'name': session['creator_name'],
-                'is_creator': True,
-            }, safe=False)
+            return JsonResponse(session, safe=False)
 
         for name in session['guest_names']:
             if name == body_data['name']:
-                return JsonResponse({
-                    'name': name,
-                    'is_creator': False,
-                }, safe=False)
+                return JsonResponse(session, safe=False)
 
         if session['limit'] == len(session['guest_names']):
             return JsonResponse({
                     'error': 'Достигнут лимит участников'
                 }, safe=False)
-        session['guest_names'].append(body_data['name'])
 
-        redis_client.hset(uid, session)
+        session['guest_names'].append(body_data['name'])
+        redis_client.set(uid, json.dumps(session))
+        return JsonResponse(session, safe=False)
+
+    return JsonResponse({
+        'error': 'Имя пользователя не указано'
+    }, safe=False)
+
+def get_session(request, uid):
+    session = redis_client.get(uid)
+    body_unicode = request.body.decode('utf-8')
+    body_data = json.loads(body_unicode)
+
+    if 'name' not in body_data:
         return JsonResponse({
-                    'name': body_data['name'],
-                    'is_creator': False,
-                }, safe=False)
+            'error': '403'
+        }, safe=False)
+
+    if session is None:
+        return JsonResponse({
+            'error': '404'
+        }, safe=False)
+
+    name = body_data['name']
+    session = json.loads(session)
+
+    if session['creator_name'] == name or name in session['guest_names']:
+        return JsonResponse(session, safe=False)
+
+    return JsonResponse({
+        'error': '403'
+    }, safe=False)
 
 def create_session(request):
     body_unicode = request.body.decode('utf-8')
     body_data = json.loads(body_unicode)
-    if not (body_data.has_key('type')
-            and body_data.has_key('genre')
-            and body_data.has_key('name')
-            and body_data.has_key('limit')):
+
+    if ('type' not in body_data
+            and 'genre' not in body_data
+            and 'name' not in body_data
+            and 'limit' not in body_data):
         return HttpResponse('error')
+
     type = int(body_data['type'])
     genre = int(body_data['genre'])
     name = body_data['name']
     limit = int(body_data['limit'])
 
     try:
-        type = Type.objects.get(pk=type)
-        genre = Genre.objects.get(pk=genre)
+        type_db = Type.objects.get(pk=type)
+        genre_db = Genre.objects.get(pk=genre)
         session_time = datetime.datetime.now().timestamp()
 
-        uid = f"{type.name}-{genre.name}-{session_time}-{SALT}"
-        uid = hashlib.sha256(uid).hexdigest()
-        redis_client.hset(uid, maping={
+        uid = f"{type_db.name}-{genre_db.name}-{session_time}-{SALT}"
+        uid = hashlib.sha256(uid.encode('utf-8')).hexdigest()
+        session_obj = {
             'creator_name': name,
             'guest_names': [],
-            'genre': genre,
-            'type': type,
+            'genre': genre_db.id,
+            'type': type_db.id,
             'limit': limit,
             'uid': uid,
             'history': [],
             'status': False,
             'result': [],
-        })
+        }
+        redis_client.set(uid, json.dumps(session_obj))
 
-        return JsonResponse({
-                    'uid': uid,
-                }, safe=False)
+        return JsonResponse(session_obj, safe=False)
 
     except ObjectDoesNotExist:
         return HttpResponse('Type or genre does not exist')
