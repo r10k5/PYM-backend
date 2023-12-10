@@ -8,5 +8,7 @@ urlpatterns = [
     path("create-session", views.create_session, name="create-session"),
     path("check-session/<str:uid>", views.check_to_session, name="check-session"),
     path("connect-session/<str:uid>", views.connect_to_session, name="connect-session"),
-    path("get-session/<str:uid>", views.get_session, name="get-session")
+    path("get-session/<str:uid>", views.get_session, name="get-session"),
+    path("like-card/<str:uid>", views.like_card, name="like-card"),
+    path("start-session/<str:uid>", views.start_session, name="start-session"),
 ]

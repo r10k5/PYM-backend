@@ -14,6 +14,7 @@ import hashlib
 
 kp = KinopoiskDev(token=TOKENS['kinopoisk'])
 
+
 async def get_movies_async(type, page):
     params = [
         MovieParams(keys=MovieField.PAGE, value=page),
@@ -23,6 +24,7 @@ async def get_movies_async(type, page):
 
     item = await kp.afind_many_movie(params=params)
     return item
+
 
 async def write_kp(request):
     page = await sync_to_async(request.GET.get)('page', '0')
@@ -59,6 +61,7 @@ async def write_kp(request):
 
     return HttpResponse('OK')
 
+
 def check_to_session(request, uid):
     session = redis_client.get(uid)
 
@@ -71,6 +74,7 @@ def check_to_session(request, uid):
         return HttpResponse('Достигнут лимит участников')
 
     return HttpResponse('OK')
+
 
 def connect_to_session(request, uid):
     session = redis_client.get(uid)
@@ -90,10 +94,15 @@ def connect_to_session(request, uid):
             if name == body_data['name']:
                 return JsonResponse(session, safe=False)
 
+        if session['status'] == 'finished':
+            return JsonResponse({
+                'error': 'Сессия уже завершилась'
+            }, safe=False)
+
         if session['limit'] == len(session['guest_names']):
             return JsonResponse({
-                    'error': 'Достигнут лимит участников'
-                }, safe=False)
+                'error': 'Достигнут лимит участников'
+            }, safe=False)
 
         session['guest_names'].append(body_data['name'])
         redis_client.set(uid, json.dumps(session))
@@ -103,14 +112,15 @@ def connect_to_session(request, uid):
         'error': 'Имя пользователя не указано'
     }, safe=False)
 
-def get_session(request, uid):
+
+def start_session(request, uid):
     session = redis_client.get(uid)
     body_unicode = request.body.decode('utf-8')
     body_data = json.loads(body_unicode)
 
     if 'name' not in body_data:
         return JsonResponse({
-            'error': '403'
+            'error': '400'
         }, safe=False)
 
     if session is None:
@@ -121,12 +131,81 @@ def get_session(request, uid):
     name = body_data['name']
     session = json.loads(session)
 
+    if session['creator_name'] != name:
+        return JsonResponse({
+            'error': '403'
+        }, safe=False)
+
+    session['status'] = 'started'
+
+    redis_client.set(uid, json.dumps(session))
+
+    return JsonResponse(session, safe=False)
+
+
+def get_session(request, uid):
+    session = redis_client.get(uid)
+    body_unicode = request.body.decode('utf-8')
+    body_data = json.loads(body_unicode)
+
+    if 'name' not in body_data:
+        return JsonResponse({
+            'error': '400'
+        }, safe=False)
+
+    if session is None:
+        return JsonResponse({
+            'error': '404'
+        }, safe=False)
+
+    name = body_data['name']
+    session = json.loads(session)
+
+    if session['status'] == 'finished':
+        return JsonResponse({
+            'error': '404'
+        }, safe=False)
+
     if session['creator_name'] == name or name in session['guest_names']:
         return JsonResponse(session, safe=False)
 
     return JsonResponse({
         'error': '403'
     }, safe=False)
+
+
+def like_card(request, uid):
+    body_unicode = request.body.decode('utf-8')
+    body_data = json.loads(body_unicode)
+
+    if ('name' not in body_data
+            and 'value' not in body_data
+            and 'card_id' not in body_data):
+        return JsonResponse({
+            'error': '400',
+        }, safe=False)
+
+    session = redis_client.get(uid)
+
+    if session is None:
+        return JsonResponse({
+            'error': '404',
+        }, safe=False)
+
+    name = body_data['name']
+    session = json.loads(session)
+    [card] = list(filter(lambda card: card['id'] == body_data['card_id'], session['cards']))
+
+    session['history'].append({
+        'card': card,
+        'user': name,
+        'isLike': body_data['value']
+    })
+
+    redis_client.set(uid, json.dumps(session))
+
+    return JsonResponse(session, safe=False)
+
 
 def create_session(request):
     body_unicode = request.body.decode('utf-8')
@@ -146,10 +225,31 @@ def create_session(request):
     try:
         type_db = Type.objects.get(pk=type)
         genre_db = Genre.objects.get(pk=genre)
+        cards = Card.objects.filter(genres=genre_db.id, types=type_db.id).order_by('?')[:30]
+        mapped_cards = []
         session_time = datetime.datetime.now().timestamp()
+
+        for card in cards:
+            genres = list(map(lambda genre_orm: genre_orm.name, card.genres.all()))
+            types = list(map(lambda type_orm: type_orm.name, card.types.all()))
+
+            mapped_cards.append({
+                'id': card.id,
+                'name': card.name,
+                'filename': card.filename,
+                'description': card.description,
+                'rate': float(card.rate),
+                'genres': genres,
+                'types': types,
+                'year': card.year,
+                'duration_all': card.duration_all,
+                'duration_series': card.duration_series,
+                'count_series': card.count_series,
+            })
 
         uid = f"{type_db.name}-{genre_db.name}-{session_time}-{SALT}"
         uid = hashlib.sha256(uid.encode('utf-8')).hexdigest()
+
         session_obj = {
             'creator_name': name,
             'guest_names': [],
@@ -158,16 +258,17 @@ def create_session(request):
             'limit': limit,
             'uid': uid,
             'history': [],
-            'status': False,
+            'status': 'pending',
             'result': [],
+            'cards': mapped_cards,
         }
+        print(session_obj)
         redis_client.set(uid, json.dumps(session_obj))
 
         return JsonResponse(session_obj, safe=False)
 
     except ObjectDoesNotExist:
         return HttpResponse('Type or genre does not exist')
-
 
 
 def index(request):
