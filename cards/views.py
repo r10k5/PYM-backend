@@ -1,6 +1,3 @@
-import asyncio
-
-from django.core import serializers
 from django.http import HttpResponse, JsonResponse
 from kinopoisk_dev import KinopoiskDev, MovieParams, MovieField
 from .models import Card, Type, Genre
@@ -174,6 +171,28 @@ def get_session(request, uid):
     }, safe=False)
 
 
+def check_results(session):
+    concreate_result = []
+    results = {}
+    for record in session['history']:
+        result_id = str(record['card']['id'])
+        if str(record['card']['id']) in results:
+            if record['isLike']:
+                results[result_id] += 1
+        else:
+            results[result_id] = 0
+            if record['isLike']:
+                results[result_id] += 1
+
+        if results[result_id] == session['limit']:
+            concreate_result.append({
+                'card': record['card'],
+                'likeCount': results[result_id]
+            })
+
+    return concreate_result
+
+
 def like_card(request, uid):
     body_unicode = request.body.decode('utf-8')
     body_data = json.loads(body_unicode)
@@ -201,6 +220,8 @@ def like_card(request, uid):
         'user': name,
         'isLike': body_data['value']
     })
+
+    session['result'] = check_results(session)
 
     redis_client.set(uid, json.dumps(session))
 
