@@ -174,6 +174,7 @@ def get_session(request, uid):
 def check_results(session):
     concreate_result = []
     results = {}
+
     for record in session['history']:
         result_id = str(record['card']['id'])
         if str(record['card']['id']) in results:
@@ -184,7 +185,7 @@ def check_results(session):
             if record['isLike']:
                 results[result_id] += 1
 
-        if results[result_id] == session['limit']:
+        if results[result_id] == len(session['guest_names']) + 1:
             concreate_result.append({
                 'card': record['card'],
                 'likeCount': results[result_id]
